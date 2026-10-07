@@ -1,6 +1,6 @@
 ---
 name: cyber-code-review
-description: Advisory security code review of a code change (diff). Use when asked to do a security review, review for vulnerabilities, check a pull request, branch, or commit for security issues, or audit changed code for input validation, authentication or authorization, hard-coded or fallback secrets, cryptography, software supply chain (dependencies, CI workflows, build and release), or logging, error handling, and audit trails. Reviews changed code only, against six areas. Reports findings with a one-sentence exploit scenario, a per-area coverage ledger, dropped findings with reasons, and an advisory PASS, WARN, FAIL, or UNKNOWN verdict. Language-neutral; a named language adds a language pack on request. Never blocks a merge, never runs exploits, scanners, or the code under review.
+description: Advisory security code review of a code change (diff). Use when asked to do a security review, review for vulnerabilities, check a pull request, branch, or commit for security issues, or audit changed code for input validation and output handling (injection, XSS, CSRF, SSRF, redirects, file upload, mass assignment, business-logic and resource abuse), authentication or authorization (including MFA, reset tokens, security headers, CSP, CORS), hard-coded or fallback secrets, cryptography (including TLS configuration), software supply chain (dependencies, CI workflows, build and release), or logging, error handling, and audit trails. Reviews changed code only, against six areas. Reports findings with a one-sentence exploit scenario, a per-area coverage ledger, dropped findings with reasons, and an advisory PASS, WARN, FAIL, or UNKNOWN verdict. Language-neutral; a named language adds a language pack on request. Never blocks a merge, never runs exploits, scanners, or the code under review.
 license: Organisation-authored; see Licence and attribution
 metadata:
   version: "1.0"
@@ -86,26 +86,36 @@ The decisive question for a configuration secret or default is whether the appli
 
 ## Area 1: Input validation
 
-Use for every changed entry point and every changed sink, starting from the boundary map (step 3).
+Use for every changed entry point and every changed sink, starting from the boundary map (step 3). Covers inbound validation, output encoding at sinks, request-forgery and redirect handling, uploads, model binding, and business-logic and resource-abuse limits.
 
 Tags: `[S]` sourced from the cited standard. `[O]` originated by this skill; the anchor is the nearest standard requirement, or "no anchor".
 
 - **IV-1 [S] Server-side enforcement.** Input rules are enforced at the trusted layer. Validation that exists only in client code, a template, or a UI handler, while the server accepts the raw value, is a finding. *Source:* ASVS 5.0 2.2.2; OWASP-SCR Input Validation, "server-side validation".
 - **IV-2 [S] Positive validation.** Accepted input is described by an allowlist, pattern, range, or structure. A denylist or clean-up pass that strips known-bad characters and continues is not sufficient. *Source:* ASVS 5.0 2.2.1; OWASP-IV, "denylisting or cleaning input".
 - **IV-3 [S] Reject, do not repair.** Invalid requests are rejected with an error. Processing does not continue with partly validated data, and a failed validator's result is not ignored or replaced with a default. *Source:* OWASP-IV, rejecting invalid requests rather than continuing with partly validated data.
-- **IV-4 [S] Business-rule validation and step order.** Input satisfies the operation's business expectations. Multi-step flows run in the expected order, and a step cannot be skipped by calling a later endpoint directly. *Source:* ASVS 5.0 2.2.1; ASVS 5.0 2.3.1.
+- **IV-4 [S] Business-rule validation and step order.** Input satisfies the operation's business expectations. Multi-step flows run in the expected order, and a step cannot be skipped by calling a later endpoint directly. State changes are checked server-side against the record's current state, and a client-supplied status or step value is not trusted (workflow bypass). *Source:* ASVS 5.0 2.2.1; ASVS 5.0 2.3.1; OWASP-BIZLOGIC.
 - **IV-5 [S] Query construction.** Data reaches SQL, NoSQL, ORM raw queries, Cypher, HQL, and similar languages only through parameters or a protected query API. String concatenation or formatting of user-controlled values into a query is a finding. Dynamic table or column names from input need an allowlist. *Source:* ASVS 5.0 1.2.4; OWASP-SCR Input Validation (SQL injection prevention) and Common Vulnerability Patterns.
 - **IV-6 [S] Operating-system commands.** No shell is invoked with user-controlled text. Calls use argument arrays or contextual encoding, not a single command string (look for `shell=True`, `system()`, `exec` of a concatenated string, backticks). *Source:* ASVS 5.0 1.2.5; OWASP-SCR Common Vulnerability Patterns.
 - **IV-7 [S] Dynamic code evaluation.** Input is never evaluated as code or as a dynamic expression (`eval`, `exec`, `new Function`, dynamic `import` of input, template or expression-language parsing of request data). *Source:* ASVS 5.0 1.3.2.
 - **IV-8 [S] XML parser configuration.** New or changed XML parsers disable external entity resolution and DTD processing. *Source:* ASVS 5.0 1.5.1.
 - **IV-9 [O] Boundary map.** Every changed entry point appears in the boundary map with its source, trust level, and validation. A field that reaches a sink without validation is a candidate finding. Internal queues, partner feeds, and stored records are validated when they cross a trust boundary. *Source:* OWASP-IV, "Trusting internal sources"; the map's anchor is ASVS 5.0 2.2.1 and 2.2.2.
 - **IV-10 [S] Validation errors reveal nothing.** Failure messages name the rule, not the query, path, schema, stack trace, or exception text. *Source:* OWASP-SCR Input Validation (error messages); ASVS 5.0 16.5.1.
-- **IV-11 [S] Path and file-name handling.** Paths built from input are resolved and checked against an allowed base directory. File names from input are not trusted as paths (look for `open`, `read`, `send_file`, `join` with input and no normalisation). *Source:* no anchor verified in this survey; the ASVS file-handling chapter was not read. Mark the item checked with the note "no anchor verified".
+- **IV-11 [S] Path and file-name handling.** Paths built from input are resolved and checked against an allowed base directory. File names from input are not trusted as paths (look for `open`, `read`, `send_file`, `join` with input and no normalisation). Uploads add their own checks under IV-17. *Source:* ASVS 5.0 5.3.2.
 - **IV-12 [O] Deserialisation of input.** Input is not deserialised into objects that can run code or create arbitrary types (for example pickle, Java object streams, YAML loaders that build arbitrary types). Use a data-only format or a type allowlist. A parser switched to a permissive mode is a finding. *Source:* no ASVS anchor verified; OWASP Top 10:2025 A08 names the class. Anchor: none.
+- **IV-13 [S] Output encoding at sinks (XSS).** Untrusted data is encoded for the exact output context (HTML element, attribute, JavaScript, CSS, or URL) where it is written, not earlier. Raw-render sinks are findings when they receive request-derived or stored data (`innerHTML`, `document.write`, `dangerouslySetInnerHTML`, `v-html`, a template with autoescape off or a `|safe` filter, an unquoted attribute). URLs built from input permit only safe schemes, never `javascript:` or `data:`. *Source:* ASVS 5.0 1.2.1, 1.2.2, 1.2.3, 3.2.2; OWASP-XSS.
+- **IV-14 [S] Cross-site request forgery.** A state-changing request authenticated by ambient credentials (cookies, HTTP auth) requires an anti-forgery token, a non-safelisted custom header, or a validated Origin. A state change on GET, a removed or newly exempted CSRF check, and SameSite as the only control are findings. *Source:* ASVS 5.0 3.5.1; OWASP-CSRF.
+- **IV-15 [S] Server-side request forgery.** A server-side fetch whose URL, host, or port comes from input (webhooks, link previews, importers, image fetchers) validates protocol, host, and port against an allowlist, checks the resolved address (no loopback, link-local or cloud-metadata, or private ranges), and does not follow redirects to unchecked targets. *Source:* ASVS 5.0 1.3.6; OWASP-SSRF.
+- **IV-16 [S] Unvalidated redirects.** A redirect or forward target taken from input (`next`, `returnUrl`, `redirect_uri`) is a relative path or appears on an allowlist of destinations. A prefix, substring, or suffix check on the host is not an allowlist. *Source:* ASVS 5.0 3.7.2; OWASP-REDIRECT.
+- **IV-17 [S] File upload.** An accepted upload has its extension and its content checked against the expected type (the client-supplied content type is not evidence), a size cap, and, for archives, limits on uncompressed size and entry count. It is stored under a server-generated name outside the web root or where it is never executed, and is served with a fixed content type. *Source:* ASVS 5.0 5.2.1, 5.2.2, 5.2.3, 5.3.1, 5.3.2; OWASP-UPLOAD.
+- **IV-18 [S] Mass assignment.** Inbound binding copies only allowlisted fields into a model or record. Binding a whole request body, or an entity used as the request type, is a finding when the model holds fields the caller must not set (`Model(**request.json)`, `Object.assign(model, req.body)`, `permit!`, `fields = "__all__"`, a role, owner, price, or status field). See AA-19 for role-grant paths. *Source:* ASVS 5.0 15.3.3; OWASP-MASS.
+- **IV-19 [S] Race conditions and TOCTOU.** A check on shared state and the action that depends on it run as one atomic step: a transaction with a row lock, a conditional update, a unique constraint, or an atomic file open. A read-then-write on a balance, stock count, coupon, one-time token, or uniqueness rule without such protection is a finding. *Source:* ASVS 5.0 2.3.4, 15.4.1, 15.4.2; OWASP-BIZLOGIC.
+- **IV-20 [S] Transaction integrity and rollback.** A multi-step state change (money movement, inventory, writes across several records) runs in one transaction. A failure after the first write rolls back, and a swallowed error or a commit before the last step leaves partial state. *Source:* ASVS 5.0 2.3.3; OWASP-BIZLOGIC.
+- **IV-21 [S] Business limits and rate limiting.** An operation that is costly, abusable, or has a business ceiling (sending email or SMS, signup, export, search, quantity or amount per order) enforces the documented limit server-side and has anti-automation or rate limiting. A removed limit or an unlimited new endpoint is a finding. Login-style throttling is AA-3. *Source:* ASVS 5.0 2.3.2, 2.4.1; OWASP-BIZLOGIC; OWASP-DOS.
+- **IV-22 [S] Unbounded resource use.** Loop counts, recursion depth, allocation sizes, page sizes, request and decompressed body sizes, and fan-out that derive from input have an upper bound. Regular expressions with nested quantifiers applied to input are a finding. *Source:* ASVS 5.0 5.2.1; OWASP-DOS.
 
 ## Area 2: Authentication and authorization
 
-Use for every changed authentication path, session path, permission check, and data access. If the diff touches none of these, mark the area not applicable, listing the files checked and the reason. Regression of a removed check is covered by step 5.
+Use for every changed authentication path, session path, permission check, data access, and HTTP response-hardening configuration (security headers, CSP, CORS). If the diff touches none of these, mark the area not applicable, listing the files checked and the reason. Regression of a removed check is covered by step 5.
 
 ### Authentication
 
@@ -131,6 +141,14 @@ Use for every changed authentication path, session path, permission check, and d
 - **AA-17 [S] Response data minimisation.** A changed endpoint returns only the fields the caller needs. Serialising a whole object, including hashes, tokens, internal IDs, or other users' data, is a finding. *Source:* ASVS 5.0 15.3.1.
 - **AA-18 [S] Subject-based access at L3.** At L3 scope, access is decided by the originating user's permissions, not an intermediary service's. A background job or service account that performs a user-triggered read or write with broader permissions and no check of the user's rights is a finding. Apply only when the project targets L3. *Source:* ASVS 5.0 8.3.3.
 - **AA-19 [O] Privilege change paths.** A path that assigns, grants, or elevates a role, scope, or group checks that the actor may grant it and that the target is in scope (for example, a role-update endpoint that accepts a role the actor could not grant, or an invitation that lets the invitee choose their role). *Source:* anchored to ASVS 5.0 8.2.1 and 8.2.2.
+
+### Multi-factor, recovery, and response hardening
+
+- **AA-20 [S] MFA for high-risk accounts.** Administrator, privileged, and money-moving accounts require a second factor. A changed login path does not bypass it: look for an alternate or API login route that skips the second step, a "remember this device" state with no expiry, and a later endpoint reachable without the MFA step. *Source:* ASVS 5.0 6.3.3, 6.3.4; OWASP-MFA.
+- **AA-21 [S] Reset-token lifecycle.** A password-reset or recovery token comes from a CSPRNG (CR-7), is stored hashed, is bound to one account, expires in a short time, and works once. It is invalidated on use, on reissue, and when the password changes, and the reset flow does not bypass MFA. A long-lived or reusable token, or one that survives a newer request, is a finding. See AA-5 for initial secrets. *Source:* ASVS 5.0 6.4.3, 6.5.1; OWASP-FORGOT.
+- **AA-22 [S] Security response headers.** Changed response configuration sets or keeps HSTS, `X-Content-Type-Options: nosniff`, `frame-ancestors` (or an equivalent framing control), and a Referrer-Policy. Removing or weakening one is a finding. *Source:* ASVS 5.0 3.4.1, 3.4.4, 3.4.5, 3.4.6; OWASP-HEADERS.
+- **AA-23 [S] Content-Security-Policy.** A new or changed policy does not allow `unsafe-inline` or `unsafe-eval` for scripts, does not use wildcard or broad script sources, and keeps `object-src` and `base-uri` restricted. *Source:* ASVS 5.0 3.4.3; OWASP-CSP.
+- **AA-24 [S] CORS policy.** `Access-Control-Allow-Origin` is a fixed value or is checked against an allowlist of exact origins. Reflecting the request Origin unchecked, allowing credentials with a wildcard or the `null` origin, and suffix or regular-expression matching on origin are findings. *Source:* ASVS 5.0 3.4.2, 3.5.2; OWASP-HEADERS.
 
 ## Area 3: Secrets
 
@@ -180,6 +198,10 @@ Tags: `[S]` sourced. `[O]` originated; anchor given or "no anchor".
 ### Key lifecycle
 
 - **CR-12 [O] Key lifecycle in code.** For each item the diff touches, check that: the key comes from an approved generation method, not hand-written or derived from a guessable input; it carries an identifier or version, so rotation does not break old data; it serves one purpose (a signing key is not used for encryption, or the reverse); it is not written to source, logs, or errors (SE-7); and old keys can be retired through a defined path. Look for one constant used for both HMAC and AES, encrypted data with no key ID, and a key derived from a password without a KDF. *Source:* anchored to ASVS 5.0 11.1.1 and 11.1.2.
+
+### TLS configuration
+
+- **CR-13 [S] TLS versions and cipher suites.** Changed TLS or server configuration enables only TLS 1.2 and 1.3, with the newest preferred, and only recommended cipher suites. SSLv3, TLS 1.0 and 1.1, NULL, export, RC4, DES or 3DES, and anonymous suites are findings, as is a lowered minimum version or a wide protocol constant with no minimum set (`PROTOCOL_TLSv1`, `ssl.PROTOCOL_SSLv23` alone, `MinVersion` removed). At L3 scope, suites must give forward secrecy. A fallback to plaintext HTTP is a finding. Extends CR-10. *Source:* ASVS 5.0 12.1.1, 12.1.2, 12.2.1; OWASP-TLS.
 
 ## Area 5: Software supply chain
 
@@ -340,7 +362,7 @@ One block per area, all six, even when not applicable. Use exactly one status pe
 ```
 Area 1 Input validation     Status: examined
   Files:    <paths read at head>
-  Checked:  IV-1 .. IV-12 (list the IDs checked)
+  Checked:  IV-1 .. IV-22 (list the IDs checked)
   Skipped:  <items not applicable, each with the reason>
   Not examined: <items not reached, each with the reason; or "none">
 ```
@@ -369,6 +391,8 @@ Each checklist item cites a standard and a requirement ID, or the section of a c
 | ASVS 5.0 `<id>` | OWASP Application Security Verification Standard, version 5.0, requirement ID and level |
 | OWASP-SCR | OWASP Secure Code Review Cheat Sheet, named checklist |
 | OWASP-IV, OWASP-AUTHN, OWASP-AUTHZ, OWASP-CRYPTO, OWASP-KM, OWASP-SECRETS, OWASP-LOG, OWASP-LOGVOCAB, OWASP-ERR | OWASP cheat sheets for input validation, authentication, authorization, cryptographic storage, key management, secrets management, logging, logging vocabulary, and error handling, by named section |
+| OWASP-XSS, OWASP-CSRF, OWASP-SSRF, OWASP-REDIRECT, OWASP-UPLOAD, OWASP-MASS, OWASP-BIZLOGIC, OWASP-DOS | OWASP cheat sheets for cross-site scripting prevention, cross-site request forgery prevention, server-side request forgery prevention, unvalidated redirects and forwards, file upload, mass assignment, business logic security, and denial of service |
+| OWASP-MFA, OWASP-FORGOT, OWASP-HEADERS, OWASP-CSP, OWASP-TLS | OWASP cheat sheets for multifactor authentication, forgot password, HTTP headers (including CORS headers), content security policy, and transport layer security |
 | SLSA-BUILD `L1`–`L3`, SLSA-SRC `L1`–`L4` | SLSA v1.2 Build and Source tracks, by level |
 | SCORECARD `<check>` | OpenSSF Scorecard check documentation, by check name |
 
